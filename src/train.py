@@ -6,6 +6,7 @@ from flax.training import train_state
 import optax
 import pandas as pd
 import matplotlib.pyplot as plt
+from functools import partial
 
 from modules.graph_attention import sparse_softmax2_batch
 from model_utils import read_model_jax
@@ -15,7 +16,7 @@ rng = jax.random.PRNGKey(0)
 
 def load_targets(dset_path, split="Train"):
     """
-    load target classifications 
+    load target classifications. 
     """
     df = pd.read_csv(dset_path)
     arr = df.to_numpy(dtype=int).T
@@ -33,6 +34,45 @@ def load_targets(dset_path, split="Train"):
     return jax.random.permutation(rng, res, axis=0)
     
 
+def get_batch(td, targets, i):
+    Q = td.refs.at[B*i: (i+1)*B].get()
+    Q_ok = td.ok_pos.at[B*i: (i+1)*B].get()
+    t = jnp.array(targets[B*i: (i+1)*B])
+
+    return Q, Q_ok, t
+
+# @partial(jax.jit, static_argnums=(0))
+def eval_metrics(model, params, td, tset):
+    """
+    evaluate accuracy on a set of labels
+    """
+
+    td_widths = jnp.sum(td.paths != td.paths.shape[0], axis=0)
+
+    matches = 0
+    samples = 0
+
+    logp_sum = 0
+
+    for i in range(tset.shape[0] // B):
+
+        # accuracy @ 1
+        Q, Q_ok, t = get_batch(td, tset, i)
+        logits = model.apply(params, Q, Q_ok, td)
+        filled = jnp.take(logits, td.paths, axis=1)
+        filled = jnp.nan_to_num(filled, nan=0)
+        total = jnp.sum(filled, axis=2)
+        chosen = jnp.argmax(total, axis=1)
+        chosen_path = jnp.take(td.paths, chosen, axis=0).at[:, 1:].get()
+
+        t_mask = t != -1
+        matches += jnp.sum(t_mask*(t == chosen_path), axis=0)
+        samples += jnp.sum(t_mask, axis=0)
+        logp_sum += (jnp.sum(jnp.sum(filled, axis=1), axis=0) / td_widths).at[1:].get()
+        print(f"finish eval on batch {i}")
+
+    return matches / samples, jnp.exp(-logp_sum / samples)
+
 def create_train_state(model, rng, in_shapes, td, hp):
     """
     create train state given
@@ -42,11 +82,12 @@ def create_train_state(model, rng, in_shapes, td, hp):
     rng: PRNGKey
     hp: hyperparameters dict
     """
+    schedule = optax.linear_schedule(hp['lr'], 0.0, 1000)
 
     Q = jnp.ones(in_shapes[0], dtype=jnp.uint8)*128
     Q_ok = jnp.ones(in_shapes[1], dtype=jnp.uint8)*128
     params = model.init(rng, Q, Q_ok, td)
-    optim = optax.adam(learning_rate=hp['lr'])
+    optim = optax.adamw(learning_rate=schedule)
 
     return train_state.TrainState.create(
         apply_fn=model.apply,
@@ -76,6 +117,7 @@ def eval_fn(params, Q, Q_ok, t, td, train_state):
 
 grad_fn = jax.value_and_grad(eval_fn)
 
+
 @jax.jit
 def train_step(Q, Q_ok, t, td, ts):
     """
@@ -90,12 +132,6 @@ def train_step(Q, Q_ok, t, td, ts):
     return new_state, val
 
 
-def get_batch(td, targets, i):
-    Q = td.refs.at[B*i: (i+1)*B].get()
-    Q_ok = td.ok_pos.at[B*i: (i+1)*B].get()
-    t = jnp.array(targets[B*i: B*(i+1)])
-
-    return Q, Q_ok, t
 
 if __name__ == "__main__":
 
@@ -108,13 +144,13 @@ if __name__ == "__main__":
     d = td.refs.shape[1]*8
     d_ok = td.ok_pos.shape[1]*8
     hp = {
-        "lr": 1e-4
+        "lr": 1e-5
     }
-    model = seqnetShallow(100, td.N, d, 20)
+    model = seqnetShallow(150, td.N, d, 30)
     ts = create_train_state(model, rng, ((B, td.refs.shape[1]), (B, td.ok_pos.shape[1])), td, hp)
 
     hist = []
-
+    
     for i in range(train_t.shape[0] // B):
         Q, Q_ok, t = get_batch(td, train_t, i)
         ts, val = train_step(Q, Q_ok, t, td, ts)
@@ -122,8 +158,15 @@ if __name__ == "__main__":
 
         print(f"minibatch {i}, loss:{val}")
 
-        if i == 500:
+        # overfit on a small set
+        if i == 200:
             break
 
     plt.plot(hist)
+    plt.xlabel("minibatches")
+    plt.ylabel("Cross Entropy")
     plt.savefig("hist.png")
+
+    print("--- acc eval ---")
+    acc = eval_metrics(model, ts.params, td, load_targets("data/37k-targets.csv", "Val"))
+    print(acc)

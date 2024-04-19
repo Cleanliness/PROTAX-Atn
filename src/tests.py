@@ -27,13 +27,13 @@ def test_softmax():
 
 
 def test_QKV_seqdist():
-    V = QKV_seqdist(q, q_ok, td)
+    V = QKV_seqdist(q, q_ok, td)[0]
     assert V.shape[0] == td.N
     print("QKV correctness passed")
 
 
 def test_QKV_seqdist_batched():
-    V = QKV_seqdist_batched(q_batch, q_ok_batch, td)
+    V = QKV_seqdist_batched(q_batch, q_ok_batch, td)[0]
     assert V.shape[:-1] == (B, td.N)
 
     print("QKV batched correctness passed")

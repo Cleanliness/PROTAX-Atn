@@ -42,8 +42,8 @@ class seqsim_atn(nn.Module):
     d: int              # sequence dimensionality
 
     def setup(self):
-        self.W_o = self.param('W_o', nn.initializers.lecun_normal(), (self.d, self.out_dim))
-        self.b_o = self.param('b_o', nn.initializers.zeros, (self.out_dim,))
+        self.W_o = self.param('W_o', nn.initializers.lecun_normal(), (self.d, self.out_dim-1))
+        self.b_o = self.param('b_o', nn.initializers.zeros, (self.out_dim-1,))
 
     def __call__(self, Q, Q_ok, td):
         """
@@ -54,9 +54,11 @@ class seqsim_atn(nn.Module):
             td - Descriptor of sparsity structure (defines atn neighborhoods for each (V)alue)
         """
 
-        V = QKV_seqdist_batched(Q, Q_ok, td)
-        z = V @ jnp.expand_dims(self.W_o, 0) + self.b_o    # (B, N, d) -> (B, N, d_o)
-        return z     
+        V, mindists = QKV_seqdist_batched(Q, Q_ok, td)
+        z = V @ jnp.expand_dims(self.W_o, 0) + self.b_o    # (B, N, d) -> (B, N, d_o-1)
+        mindists = jnp.expand_dims(mindists, 2)
+        z = jnp.concatenate((z, mindists), axis=2)
+        return z
 
 
 def seqsim(q, ok_query, td):
@@ -92,9 +94,9 @@ def sparse_softmax2(X, seg, num_seg):
     """
 
     # logsumexp applied over all segments
-    max_terms = jnp.take(jax.ops.segment_max(X, seg, num_segments=num_seg), seg)
+    max_terms = jnp.take(jax.ops.segment_max(X, seg, num_segments=num_seg, indices_are_sorted=True), seg)
     applied = X - max_terms
-    norm_terms = jnp.take(jnp.log(jax.ops.segment_sum(jnp.exp(applied), seg, num_segments=num_seg)), seg)
+    norm_terms = jnp.take(jnp.log(jax.ops.segment_sum(jnp.exp(applied), seg, num_segments=num_seg, indices_are_sorted=True)), seg)
     return applied - norm_terms
 
 sparse_softmax2_batch = jax.vmap(sparse_softmax2, (0, None, None), 0)
@@ -114,8 +116,6 @@ def sparse_softmax(X, seg, num_seg):
     applied = jnp.exp(X)
     norm_terms = jnp.take(jax.ops.segment_sum(applied, seg, num_segments=num_seg), seg)
     return applied / norm_terms
-
-    # max_x = jnp.ops.segment_max()
 
 
 def QKV(q, ok_query, td):
@@ -142,10 +142,14 @@ def QKV_seqdist(q, ok_query, td):
     dists = seqsim(q, ok_query, td)
     applied = jnp.take(dists, td.ref2seg)
     scores = jnp.exp(sparse_softmax2(applied, td.segments, td.N))
+
+    segmins = jax.ops.segment_min(applied, td.segments, num_segments=td.N, indices_are_sorted=True)
+    segmins = jnp.where(jnp.isfinite(segmins), segmins, -1)
     values = jnp.unpackbits(td.refs, axis=1)
     applied_values = jnp.take(values, td.ref2seg, axis=0)
     applied_values *= jnp.expand_dims(scores, 1)
-    return jax.ops.segment_sum(applied_values, td.segments, num_segments=td.N)
+    rescaled_V = jax.ops.segment_sum(applied_values, td.segments, num_segments=td.N, indices_are_sorted=True)
+    return rescaled_V, segmins
 
 QKV_seqdist_batched = jax.jit(jax.vmap(QKV_seqdist, (0, 0, None), 0))
 
