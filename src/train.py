@@ -11,6 +11,7 @@ from modules.graph_attention import sparse_softmax2_batch
 from model_utils import read_model_jax
 from models import seqnetShallow
 
+rng = jax.random.PRNGKey(0)
 
 def load_targets(dset_path, split="Train"):
     """
@@ -23,11 +24,13 @@ def load_targets(dset_path, split="Train"):
     val_split_idx = int(arr.shape[0] * 0.9)
 
     if split == "Train":
-        return arr[train_split_idx:]
+        res = arr[:train_split_idx]
     elif split == "Val":
-        return arr[train_split_idx:val_split_idx]
+        res = arr[train_split_idx:val_split_idx]
     else:
-        return arr[val_split_idx:]
+        res = arr[val_split_idx:]
+    
+    return jax.random.permutation(rng, res, axis=0)
     
 
 def create_train_state(model, rng, in_shapes, td, hp):
@@ -40,8 +43,8 @@ def create_train_state(model, rng, in_shapes, td, hp):
     hp: hyperparameters dict
     """
 
-    Q = jnp.ones(in_shapes[0], dtype=jnp.uint8)
-    Q_ok = jnp.ones(in_shapes[1], dtype=jnp.uint8)
+    Q = jnp.ones(in_shapes[0], dtype=jnp.uint8)*128
+    Q_ok = jnp.ones(in_shapes[1], dtype=jnp.uint8)*128
     params = model.init(rng, Q, Q_ok, td)
     optim = optax.adam(learning_rate=hp['lr'])
 
@@ -67,7 +70,7 @@ def eval_fn(params, Q, Q_ok, t, td, train_state):
     model = train_state.apply_fn
     logits = model(params, Q, Q_ok, td)
     branch = -sparse_softmax2_batch(logits, td.parents, 111813)
-    loss = jnp.sum(jnp.take(branch, t)) / B
+    loss = jnp.sum(jnp.take(branch, t))
 
     return loss
 
@@ -105,9 +108,9 @@ if __name__ == "__main__":
     d = td.refs.shape[1]*8
     d_ok = td.ok_pos.shape[1]*8
     hp = {
-        "lr": 1e-3
+        "lr": 1e-4
     }
-    model = seqnetShallow(10, td.N, d, 5)
+    model = seqnetShallow(100, td.N, d, 20)
     ts = create_train_state(model, rng, ((B, td.refs.shape[1]), (B, td.ok_pos.shape[1])), td, hp)
 
     hist = []
@@ -117,7 +120,10 @@ if __name__ == "__main__":
         ts, val = train_step(Q, Q_ok, t, td, ts)
         hist.append(val)
 
-        print(f"minibatch {i}")
+        print(f"minibatch {i}, loss:{val}")
+
+        if i == 500:
+            break
 
     plt.plot(hist)
     plt.savefig("hist.png")
