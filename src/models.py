@@ -11,9 +11,9 @@ class seqnetShallow(nn.Module):
     'Shallow' model intended to match baseline PROTAX 
     but replaces KNN with cross attention
     """
-    hid_dim: int
-    out_dim: int
-    seq_dim: int
+    hid_dim: int    # attention layer output dim
+    out_dim: int    # logits to output
+    seq_dim: int    # dimensions of one sequence
     ne_dim: int     # node embedding dimension
 
     def setup(self):

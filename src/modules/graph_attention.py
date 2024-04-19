@@ -58,6 +58,7 @@ class seqsim_atn(nn.Module):
         z = V @ jnp.expand_dims(self.W_o, 0) + self.b_o    # (B, N, d) -> (B, N, d_o)
         return z     
 
+
 def seqsim(q, ok_query, td):
     """
     pairwise sequence similarity, normalized by length
@@ -80,26 +81,26 @@ def seqsim(q, ok_query, td):
 seqsim_batched = jax.vmap(seqsim, (0, 0, None), 0)
 
 
-def sparse_softmax2(X, inds, seg, num_seg):
+def sparse_softmax2(X, seg, num_seg):
     """
     Numerically stable softmax for training
 
     Args:
         X       - input to take softmax over (d,)
-        inds    - maps input to segment dim (s,) max=d-1
         seg     - indices corresponding to neighborhoods  (s)
         num_seg - number of segments (for JIT compilation)
     """
 
     # logsumexp applied over all segments
-    applied = jnp.take(X, inds)
-    max_terms = jnp.take(jax.ops.segment_max(applied, seg, num_segments=num_seg), seg)
-    applied -= max_terms
+    max_terms = jnp.take(jax.ops.segment_max(X, seg, num_segments=num_seg), seg)
+    applied = X - max_terms
     norm_terms = jnp.take(jnp.log(jax.ops.segment_sum(jnp.exp(applied), seg, num_segments=num_seg)), seg)
-    return jnp.exp(applied - norm_terms)
+    return applied - norm_terms
+
+sparse_softmax2_batch = jax.vmap(sparse_softmax2, (0, None, None), 0)
 
 
-def sparse_softmax(X, inds, seg, num_seg):
+def sparse_softmax(X, seg, num_seg):
     """
     Performs softmax over segments for inference
 
@@ -110,7 +111,7 @@ def sparse_softmax(X, inds, seg, num_seg):
         num_seg - number of segments (for JIT compilation)
     """
     
-    applied = jnp.take(jnp.exp(X), inds)
+    applied = jnp.exp(X)
     norm_terms = jnp.take(jax.ops.segment_sum(applied, seg, num_segments=num_seg), seg)
     return applied / norm_terms
 
@@ -119,13 +120,28 @@ def sparse_softmax(X, inds, seg, num_seg):
 
 def QKV(q, ok_query, td):
     dists = seqsim(q, ok_query, td)
-    scores = sparse_softmax2(dists, td.ref2seg, td.segments, td.N)
+    applied = jnp.take(dists, td.ref2seg)
+    scores = jnp.exp(sparse_softmax2(applied, td.segments, td.N))
     applied_values = jnp.take(td.refs, td.ref2seg)*scores
     return jax.ops.segment_sum(applied_values, td.segments, num_segments=td.N)
 
+
 def QKV_seqdist(q, ok_query, td):
+    """
+    Combines Keys Queries and values using sequence distance
+
+    Args:
+        q (ndarray): The query vector.
+        ok_query (ndarray): The reference vectors.
+        td (ndarray): The transformation data.
+
+    Returns:
+        jnp.array: reweighted sequence for each node
+
+    """
     dists = seqsim(q, ok_query, td)
-    scores = sparse_softmax2(dists, td.ref2seg, td.segments, td.N)
+    applied = jnp.take(dists, td.ref2seg)
+    scores = jnp.exp(sparse_softmax2(applied, td.segments, td.N))
     values = jnp.unpackbits(td.refs, axis=1)
     applied_values = jnp.take(values, td.ref2seg, axis=0)
     applied_values *= jnp.expand_dims(scores, 1)

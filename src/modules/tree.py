@@ -29,14 +29,16 @@ class TaxDescriptor:
     segments: neighborhood of reference seqs for each node
     paths: path to each node from root
     node_state: binary variables of node state (unknown, num_refs)
+    lvl: boundary indices of depth for each node
     """
     refs: jnp.array                  # [R, dr]
     ok_pos: jnp.array                # [R]
     parents: jnp.array               # [N] (sorted)
-    ref2seg: jnp.array              # [E] 
+    ref2seg: jnp.array               # [E] 
     segments: jnp.array              # [E]
     paths: jnp.array                 # [N, p]
     node_state: jnp.array            # [N, 2]
+    lvl: tuple
 
     @property
     def N(self):

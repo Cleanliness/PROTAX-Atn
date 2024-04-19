@@ -6,11 +6,10 @@ from scipy.sparse import csr_matrix
 from modules.tree import TaxDescriptor
 
 
-def read_model_jax(par_dir, tax_dir):
+def read_model_jax(tax_dir):
     """
     Read model + tax npz representation
     """
-    par_dir = Path(par_dir)
     tax_dir = Path(tax_dir)
 
     tax = np.load(tax_dir.resolve())
@@ -18,8 +17,9 @@ def read_model_jax(par_dir, tax_dir):
     refs = jnp.array(tax['refs'])
     
     ok_pos = jnp.array(tax['ok_pos'])
-    prior = jnp.array(tax['priors'])
 
+    lvl = tax["node_layer"]
+    bounds = read_lvl(lvl)
     parents = jnp.array(tax['segments'])            # parents of each node
     paths = jnp.array(tax['paths'])
     node_state = jnp.array(tax['node_state'])
@@ -33,14 +33,12 @@ def read_model_jax(par_dir, tax_dir):
         seqs,
         nids,
         paths,
-        node_state
+        node_state,
+        bounds
     )
 
 
-def read_lvl(tax_dir):
-    tax_dir = Path(tax_dir)
-    tax = np.load(tax_dir.resolve()) 
-    lvl = tax["node_layer"]
+def read_lvl(lvl):
     # getting layer bounds
 
     bounds = []
@@ -52,8 +50,7 @@ def read_lvl(tax_dir):
             prev = v
             previ = i
     bounds.append((previ, lvl.shape[0]))
-    return lvl, bounds
+    return tuple(bounds)
 
 
-# read_model_jax("", "models/ref_db/taxonomy37k.npz")
-print(read_lvl("models/ref_db/taxonomy37k.npz"))
+# read_model_jax("models/ref_db/taxonomy37k.npz")
