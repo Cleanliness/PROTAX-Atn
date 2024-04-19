@@ -5,6 +5,7 @@ from scipy.sparse import csr_matrix
 
 from modules.tree import TaxDescriptor
 
+
 def read_model_jax(par_dir, tax_dir):
     """
     Read model + tax npz representation
@@ -23,11 +24,7 @@ def read_model_jax(par_dir, tax_dir):
     paths = jnp.array(tax['paths'])
     node_state = jnp.array(tax['node_state'])
 
-    N = parents.shape[0]
     nids, seqs = (tax['ref_rows'], tax['ref_cols'])
-
-    # TODO dumb way of converting to JAX BCSR
-    n2s = csr_matrix((np.ones(seqs.shape), (nids, seqs)), shape=(N, refs.shape[0]))
 
     return TaxDescriptor(
         refs,
@@ -40,4 +37,23 @@ def read_model_jax(par_dir, tax_dir):
     )
 
 
-read_model_jax("", "models/ref_db/taxonomy37k.npz")
+def read_lvl(tax_dir):
+    tax_dir = Path(tax_dir)
+    tax = np.load(tax_dir.resolve()) 
+    lvl = tax["node_layer"]
+    # getting layer bounds
+
+    bounds = []
+    prev = 0
+    previ = 0
+    for i, v in enumerate(lvl):
+        if v != prev:
+            bounds.append((previ, i))
+            prev = v
+            previ = i
+    bounds.append((previ, lvl.shape[0]))
+    return lvl, bounds
+
+
+# read_model_jax("", "models/ref_db/taxonomy37k.npz")
+print(read_lvl("models/ref_db/taxonomy37k.npz"))
